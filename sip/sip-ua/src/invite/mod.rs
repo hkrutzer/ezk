@@ -244,10 +244,9 @@ impl Usage for InviteUsage {
                 }
             }
             Method::BYE => {
-                // TODO respond to BYE with 200 before actually handling it
-                let mut state = self.inner.state.lock().await;
+                let state = self.inner.state.lock().await.set_terminated();
 
-                match state.set_terminated() {
+                match state {
                     InviteSessionState::UasProvisional {
                         dialog,
                         tsx,
@@ -269,13 +268,16 @@ impl Usage for InviteUsage {
                         }
                     }
                     InviteSessionState::Established { evt_sink } => {
-                        let bye = request.inner().take().unwrap();
+                        let mut bye = request.take();
 
-                        if let Err(SendError(UsageEvent::Bye(bye))) =
-                            evt_sink.send(UsageEvent::Bye(bye)).await
-                        {
-                            *request.inner() = Some(bye);
+                        let response = endpoint.create_response(&bye, StatusCode::OK, None);
+                        let transaction = endpoint.create_server_tsx(&mut bye);
+
+                        if let Err(e) = transaction.respond(response).await {
+                            log::warn!("Failed to respond to BYE in established state: {e:?}");
                         }
+
+                        let _ = evt_sink.send(UsageEvent::Bye(bye)).await;
                     }
                     InviteSessionState::Cancelled => {
                         // This dialog was never established.
